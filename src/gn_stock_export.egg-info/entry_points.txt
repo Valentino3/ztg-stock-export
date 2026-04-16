@@ -1,0 +1,2 @@
+[console_scripts]
+gn-stock-export = gn_stock_export.cli:app

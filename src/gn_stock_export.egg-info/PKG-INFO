@@ -1,0 +1,74 @@
+Metadata-Version: 2.4
+Name: gn-stock-export
+Version: 0.1.0
+Summary: CLI local para exportar y comparar stock desde la API de Grupo Nucleo
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: httpx>=0.28.0
+Requires-Dist: openpyxl>=3.1.0
+Requires-Dist: pandas>=2.2.0
+Requires-Dist: pytest>=9.0.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: typer>=0.12.0
+
+# GN Stock Export
+
+Aplicacion local para consultar la API de Grupo Nucleo, exportar stock a Excel/CSV y comparar el ultimo snapshot contra el anterior.
+
+## Requisitos
+
+- Python 3.12+
+- Credenciales validas en `.env`
+- Dependencias instaladas en la venv
+
+## Configuracion
+
+1. Completar `.env`:
+
+```env
+NUCLEO_ID=123
+NUCLEO_USERNAME=usuario
+NUCLEO_PASSWORD=secreto
+```
+
+2. Ajustar `config.toml` segun la estrategia comercial:
+
+- `margin_pct`: margen porcentual sobre el neto convertido a ARS
+- `fixed_markup_ars`: suma fija adicional en ARS
+- `rounding_step`: paso de redondeo final
+- `rounding_mode`: `nearest`, `up` o `down`
+- `price_tolerance_ars`: tolerancia para detectar cambios de precio
+
+## Uso
+
+Instalar el proyecto en la venv:
+
+```bash
+./.venv/Scripts/pip.exe install -e .
+```
+
+Exportar stock:
+
+```bash
+./.venv/Scripts/python.exe -m gn_stock_export export
+```
+
+Comparar los dos ultimos snapshots:
+
+```bash
+./.venv/Scripts/python.exe -m gn_stock_export compare
+```
+
+Sincronizar exportacion y comparacion:
+
+```bash
+./.venv/Scripts/python.exe -m gn_stock_export sync
+```
+
+## Salidas
+
+- `exports/stock_*.xlsx`
+- `exports/stock_*.csv`
+- `exports/stock_diff_*.xlsx`
+- `snapshots/stock_snapshot_*.json`
+

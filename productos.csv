@@ -1,0 +1,5 @@
+"Identificador de URL";Nombre;Categorías;"Nombre de propiedad 1";"Valor de propiedad 1";"Nombre de propiedad 2";"Valor de propiedad 2";"Nombre de propiedad 3";"Valor de propiedad 3";Precio;"Precio promocional";"Peso (kg)";"Alto (cm)";"Ancho (cm)";"Profundidad (cm)";Stock;SKU;"Código de barras";"Mostrar en tienda";"Envío sin cargo";Descripción;Tags;"Título para SEO";"Descripción para SEO";Marca;"Producto Físico";"MPN (Número de pieza del fabricante)";Sexo;"Rango de edad";Costo
+pantalon-corto;"Pantalón corto";Pantalones;;;;;;;220.00;200.00;1;2;20;30;;;;SI;NO;"Un artículo ineludible este verano.";;;;;SI;;;;1.21
+camisa-manga-corta;"Camisa manga corta";Camisas;Color;Blanco;Talle;Large;;;450.00;;2;1.5;30;15;;;;SI;NO;"Camisa clásica para el <strong>verano</strong>";;;;brand;NO;;;;2.99
+camisa-manga-corta;;;Color;Negro;Talle;Large;;;450.00;;2;1.5;30;15;;A1234;;;NO;;new;;;;NO;;;;
+camisa-manga-corta;;;Color;Blanco;Talle;Medium;;;450.00;;2;1.5;30;15;;B5678;;;NO;;;;;;NO;;;;3.98
