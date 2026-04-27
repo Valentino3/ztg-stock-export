@@ -1,0 +1,3 @@
+# Ejecuta el sync completo con Tienda Nube tres veces por dia.
+# Instalar con `crontab -e` en el usuario que tenga acceso al proyecto.
+0 8,14,20 * * * /opt/gn-stock-export/scripts/run_tiendanube_sync.sh >> /opt/gn-stock-export/logs/cron.log 2>&1

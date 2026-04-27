@@ -163,6 +163,75 @@ Sincroniza solo imagenes GN sobre productos ya administrados por la app:
 ./.venv/Scripts/python.exe -m gn_stock_export sync-tiendanube-images
 ```
 
+## Servidor Linux Con Cron
+
+Para ejecutar el sync automaticamente sin depender de una PC, se puede alojar el proyecto en un servidor Linux y programarlo con `cron`.
+
+Ruta recomendada:
+
+```bash
+/opt/gn-stock-export
+```
+
+Preparacion inicial en el servidor:
+
+```bash
+cd /opt/gn-stock-export
+python3 -m venv .venv
+.venv/bin/pip install -e .
+```
+
+Completar en el servidor:
+
+- `.env` con credenciales reales de Grupo Nucleo y Tienda Nube
+- `config.toml` con reglas comerciales finales
+- `brand_map.csv` y `category_map.csv` si se usan mappings
+
+Antes de activar el cron, ejecutar una prueba sin escribir cambios:
+
+```bash
+cd /opt/gn-stock-export
+.venv/bin/python -m gn_stock_export sync-tiendanube-test --config config.toml --env-file .env
+```
+
+Luego probar el script productivo una vez de forma manual:
+
+```bash
+cd /opt/gn-stock-export
+scripts/run_tiendanube_sync.sh
+```
+
+El script usa `flock` para evitar dos sincronizaciones al mismo tiempo y guarda logs diarios en:
+
+```bash
+logs/tiendanube_sync_YYYYMMDD.log
+```
+
+Para instalar la ejecucion automatica tres veces por dia:
+
+```bash
+crontab -e
+```
+
+Agregar:
+
+```cron
+0 8,14,20 * * * /opt/gn-stock-export/scripts/run_tiendanube_sync.sh >> /opt/gn-stock-export/logs/cron.log 2>&1
+```
+
+Tambien queda un ejemplo listo en:
+
+```bash
+deploy/cron.example
+```
+
+Archivos importantes en servidor:
+
+- `logs/`: logs del script y de cron
+- `exports/tiendanube_sync/`: reportes CSV, Excel y JSON de cada corrida
+- `snapshots/tiendanube_sync/`: snapshots del catalogo normalizado
+- `snapshots/tiendanube_sync_state.json`: estado local para no duplicar imagenes ya sincronizadas
+
 ## Salidas
 
 - `exports/productos_*.xlsx`
