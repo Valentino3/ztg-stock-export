@@ -28,6 +28,24 @@ min_stock_to_publish = 1
 free_shipping = false
 # Completa la columna `Producto Físico` con `SI` o `NO`.
 product_physical = true
+# Si la lista tiene valores, solo sube productos cuya categoria final este incluida.
+allowed_categories = [
+  "Tecnología",
+  "Computación",
+  "Celulares",
+  "Gaming",
+  "Audio y TV",
+  "Seguridad",
+  "Movilidad",
+]
+# Categorias finales que nunca se suben, aunque existan en GN.
+excluded_categories = [
+  "Hogar",
+  "Electro",
+  "Herramientas",
+  "Automotor",
+  "Varios",
+]
 
 [content]
 # Marca de respaldo si el producto viene sin marca o con una marca vacia.
@@ -63,7 +81,7 @@ test_product_limit = 1
 
 [tiendanube_sync]
 # Si es `true`, habilita el sync completo por API contra Tienda Nube.
-enabled = false
+enabled = true
 # Si es `true`, el sync calcula acciones pero no escribe en la tienda.
 dry_run = true
 # Tag tecnico para identificar productos administrados por esta app.

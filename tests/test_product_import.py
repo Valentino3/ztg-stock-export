@@ -227,6 +227,84 @@ def test_prepare_products_normalizes_gn_image_dict_strings(tmp_path: Path) -> No
     ]
 
 
+def test_prepare_products_filters_by_mapped_target_category(tmp_path: Path) -> None:
+    category_map = tmp_path / "category_map.csv"
+    category_map.write_text(
+        "\n".join(
+            [
+                "source_category,source_subcategory,target_category,target_subcategory",
+                "Audio,Auriculares,Audio y TV,Auriculares",
+                "Bazar,Cocina,Hogar,Cocina",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = _make_config(
+        tmp_path,
+        publication=PublicationConfig(
+            publish_with_stock_only=True,
+            min_stock_to_publish=1,
+            free_shipping=False,
+            product_physical=True,
+            allowed_categories=("Tecnologia", "Audio y TV"),
+            excluded_categories=("Hogar",),
+        ),
+        mappings=MappingConfig(
+            brand_map_csv=tmp_path / "brand_map.csv",
+            category_map_csv=category_map,
+        ),
+    )
+    stock_frame = pd.DataFrame(
+        [
+            {
+                "item_id": 101,
+                "codigo": "SKU101",
+                "ean": "779000000101",
+                "partNumber": "",
+                "marca": "Marca Demo",
+                "categoria": "Audio",
+                "subcategoria": "Auriculares",
+                "descripcion_corta": "Auricular",
+                "descripcion_larga": "Auricular",
+                "peso_gr": 100.0,
+                "alto_cm": 1.0,
+                "ancho_cm": 2.0,
+                "largo_cm": 3.0,
+                "stock_total": 10,
+                "disponible": True,
+                "precioNeto_USD": 10.0,
+                "precio_neto_ars": 10000.0,
+                "precio_final_ars": 15000.0,
+            },
+            {
+                "item_id": 202,
+                "codigo": "SKU202",
+                "ean": "779000000202",
+                "partNumber": "",
+                "marca": "Marca Demo",
+                "categoria": "Bazar",
+                "subcategoria": "Cocina",
+                "descripcion_corta": "Producto hogar",
+                "descripcion_larga": "Producto hogar",
+                "peso_gr": 100.0,
+                "alto_cm": 1.0,
+                "ancho_cm": 2.0,
+                "largo_cm": 3.0,
+                "stock_total": 10,
+                "disponible": True,
+                "precioNeto_USD": 10.0,
+                "precio_neto_ars": 10000.0,
+                "precio_final_ars": 15000.0,
+            },
+        ]
+    )
+
+    products = prepare_products(stock_frame, config)
+
+    assert [product.item_id for product in products] == ["101"]
+    assert products[0].category_name == "Audio y TV"
+
+
 def test_write_stock_exports_generates_template_import_csv(tmp_path: Path) -> None:
     config = _make_config(
         tmp_path,

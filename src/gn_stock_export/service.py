@@ -7,7 +7,12 @@ from pathlib import Path
 from gn_stock_export.api import GNApiClient
 from gn_stock_export.config import AppConfig, Credentials, TiendaNubeCredentials
 from gn_stock_export.diffing import ComparisonResult, compare_frames
-from gn_stock_export.exporter import write_comparison_workbook, write_gn_raw_exports, write_stock_exports
+from gn_stock_export.exporter import (
+    write_category_exports,
+    write_comparison_workbook,
+    write_gn_raw_exports,
+    write_stock_exports,
+)
 from gn_stock_export.normalizer import build_export_frame
 from gn_stock_export.storage import (
     SnapshotData,
@@ -41,6 +46,15 @@ class RawExportResult:
     generated_at: datetime
     outputs: dict[str, Path]
     row_count: int
+    usd_exchange: float
+
+
+@dataclass
+class CategoryExportResult:
+    generated_at: datetime
+    outputs: dict[str, Path]
+    row_count: int
+    product_count: int
     usd_exchange: float
 
 
@@ -167,6 +181,25 @@ class StockExportService:
             usd_exchange=usd_exchange,
         )
 
+    def export_categories(self) -> CategoryExportResult:
+        if self.credentials is None:
+            raise ValueError("Las credenciales son obligatorias para exportar.")
+
+        generated_at = datetime.now(timezone.utc)
+        with self.api_client_class(self.credentials) as api:
+            catalog = api.get_catalog()
+            usd_exchange = self._resolve_usd_exchange(api)
+
+        frame = build_export_frame(catalog, usd_exchange, self.config, exported_at=generated_at)
+        outputs = write_category_exports(frame, generated_at, self.config)
+        return CategoryExportResult(
+            generated_at=generated_at,
+            outputs=outputs,
+            row_count=_category_count(frame),
+            product_count=len(frame),
+            usd_exchange=usd_exchange,
+        )
+
     def test_flow(self) -> TestFlowResult:
         if self.credentials is None:
             raise ValueError("Las credenciales son obligatorias para exportar.")
@@ -256,3 +289,9 @@ class StockExportService:
             dry_run=sync_run.dry_run,
             counts=sync_run.counts,
         )
+
+
+def _category_count(frame: object) -> int:
+    if not hasattr(frame, "empty") or frame.empty:
+        return 0
+    return len(frame[["categoria", "subcategoria"]].drop_duplicates())

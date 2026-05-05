@@ -43,7 +43,7 @@ TIENDANUBE_USER_AGENT=Mi App (mail@dominio.com)
 2. Ajustar `config.toml` segun la estrategia comercial:
 
 - `[pricing]`: cotizacion USD, margen, markup, redondeo y modo del campo `Costo`
-- `[publication]`: reglas de publicacion, stock minimo, envio y producto fisico
+- `[publication]`: reglas de publicacion, stock minimo, envio, producto fisico y filtro de categorias
 - `[content]`: longitudes SEO, prefijos/sufijos de descripcion y marca por defecto
 - `[mappings]`: rutas a `brand_map.csv` y `category_map.csv`
 - `[diff]`: tolerancia para detectar cambios de precio entre snapshots
@@ -56,6 +56,9 @@ TIENDANUBE_USER_AGENT=Mi App (mail@dominio.com)
 - `category_map.csv`: `source_category,source_subcategory,target_category,target_subcategory,target_category_id`
 
 Para el sync por API, `target_category_id` debe ser el ID real de la categoria en Tienda Nube.
+
+El filtro `allowed_categories` / `excluded_categories` se aplica sobre la categoria final, despues de leer `category_map.csv`.
+Por eso, si GN devuelve una categoria con otro nombre, primero la remapeamos en `category_map.csv` y despues la app decide si se sube o no.
 
 ## Como Se Calcula El Precio
 
@@ -99,6 +102,7 @@ Tambien hay accesos directos listos para usar:
 - `sincronizar_productos.bat`: exporta y compara
 - `comparar_snapshots.bat`: compara los dos ultimos snapshots
 - `ver_productos_gn_crudo.bat`: exporta el catalogo original de GN sin transformaciones
+- `exportar_categorias.bat`: exporta categorias/subcategorias GN para revisar filtros y mappings
 - `probar_flujo_completo.bat`: genera una prueba completa usando pocos productos
 - `probar_sync_tiendanube.bat`: simula el sync completo por API sin escribir en la tienda
 - `sincronizar_tiendanube.bat`: sincroniza productos GN en Tienda Nube
@@ -119,6 +123,22 @@ Exporta el catalogo tal como llega desde Grupo Nucleo, sin conversiones para Tie
 ```bash
 ./.venv/Scripts/python.exe -m gn_stock_export raw-export
 ```
+
+### Exportar categorias GN
+
+Genera un listado agrupado de categorias y subcategorias que llegan desde Grupo Nucleo:
+
+```bash
+./.venv/Scripts/python.exe -m gn_stock_export categories-export
+```
+
+El archivo sale en `exports/` como `gn_categorias_*.csv` y `gn_categorias_*.xlsx`.
+
+Columnas principales:
+
+- `source_category` y `source_subcategory`: categorias originales de GN
+- `target_category`, `target_subcategory` y `target_category_id`: columnas editables para mapping con Tienda Nube
+- `product_count`, `products_with_stock` y `stock_total`: ayuda para decidir que categorias filtrar o subir
 
 ### Probar flujo completo
 
@@ -239,6 +259,8 @@ Archivos importantes en servidor:
 - `exports/gn_productos_crudo_*.json`
 - `exports/gn_productos_crudo_*.csv`
 - `exports/gn_productos_crudo_*.xlsx`
+- `exports/gn_categorias_*.csv`
+- `exports/gn_categorias_*.xlsx`
 - `exports/test/productos_*.csv`
 - `exports/test/productos_*.xlsx`
 - `exports/test/gn_productos_crudo_*.json`
@@ -288,6 +310,16 @@ margin_pct = 60.0
 publish_with_stock_only = true
 min_stock_to_publish = 1
 ```
+
+### Subir solo categorias permitidas
+
+```toml
+[publication]
+allowed_categories = ["Tecnología", "Computación", "Celulares", "Gaming", "Audio y TV", "Seguridad", "Movilidad"]
+excluded_categories = ["Hogar", "Electro", "Herramientas", "Automotor", "Varios"]
+```
+
+Si `allowed_categories` tiene valores, solo se suben esas categorias finales. Si `excluded_categories` tiene valores, esas categorias nunca se suben.
 
 ### Agregar un prefijo a todas las descripciones
 

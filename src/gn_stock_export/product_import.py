@@ -71,6 +71,8 @@ def prepare_products(stock_frame: pd.DataFrame, config: AppConfig) -> list[Prepa
             _as_text(row.get("subcategoria")),
             category_map,
         )
+        if not _should_include_category(category_mapping.target_category, config):
+            continue
         brand = _build_brand(
             _as_text(row.get("marca")),
             brand_map,
@@ -291,6 +293,27 @@ def _should_publish(stock_total: int, config: AppConfig) -> bool:
     return stock_total >= config.publication.min_stock_to_publish
 
 
+def _should_include_category(category: str, config: AppConfig) -> bool:
+    normalized_category = _normalize_filter_key(category)
+    excluded_categories = {
+        _normalize_filter_key(value)
+        for value in config.publication.excluded_categories
+        if _normalize_filter_key(value)
+    }
+    if normalized_category in excluded_categories:
+        return False
+
+    allowed_categories = {
+        _normalize_filter_key(value)
+        for value in config.publication.allowed_categories
+        if _normalize_filter_key(value)
+    }
+    if allowed_categories and normalized_category not in allowed_categories:
+        return False
+
+    return True
+
+
 def _resolve_cost(row: pd.Series, cost_field_mode: str) -> float:
     if cost_field_mode == "ars_neto":
         return _as_float(row.get("precio_neto_ars"))
@@ -376,6 +399,12 @@ def _normalize_text(value: str) -> str:
 
 def _normalize_key(value: str) -> str:
     return _normalize_text(value).lower()
+
+
+def _normalize_filter_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", _normalize_text(value))
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    return " ".join(ascii_value.casefold().strip().split())
 
 
 def _first_non_empty(*values: str) -> str:

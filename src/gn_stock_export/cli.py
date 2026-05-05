@@ -77,6 +77,25 @@ def raw_export_command(
         typer.echo(f"{label.upper()}: {path}")
 
 
+@app.command("categories-export")
+def categories_export_command(
+    config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),
+    env_path: Path = typer.Option(Path(".env"), "--env-file", help="Ruta al archivo .env."),
+) -> None:
+    """Exporta categorias y subcategorias GN agrupadas desde el catalogo."""
+    try:
+        service = _build_service(config_path, env_path)
+        result = service.export_categories()
+    except (ConfigError, CredentialsError, SnapshotError, RuntimeError, ValueError) as exc:
+        _abort_with_error(str(exc))
+
+    typer.echo(f"Categorias GN exportadas: {result.row_count}")
+    typer.echo(f"Productos analizados: {result.product_count}")
+    typer.echo(f"Cotizacion USD usada: {result.usd_exchange}")
+    for label, path in result.outputs.items():
+        typer.echo(f"{label.upper()}: {path}")
+
+
 @app.command("test-flow")
 def test_flow_command(
     config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
 from typing import Any
+import time
 
 import httpx
 
@@ -12,12 +15,18 @@ class TiendaNubeApiError(RuntimeError):
     """Errores generales al consumir la API de Tienda Nube."""
 
 
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
 @dataclass
 class TiendaNubeApiClient:
     credentials: TiendaNubeCredentials
     base_url: str = "https://api.tiendanube.com/v1"
     timeout_seconds: float = 60.0
     transport: httpx.BaseTransport | None = None
+    max_retries: int = 5
+    retry_base_delay_seconds: float = 2.0
+    retry_max_delay_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         self._client = httpx.Client(
@@ -127,13 +136,25 @@ class TiendaNubeApiClient:
         if json is not None:
             headers["Content-Type"] = "application/json"
 
-        response = self._client.request(
-            method,
-            path,
-            params=params,
-            json=json,
-            headers=headers,
-        )
+        retry_count = 0
+        while True:
+            response = self._client.request(
+                method,
+                path,
+                params=params,
+                json=json,
+                headers=headers,
+            )
+            if not response.is_error:
+                break
+            if response.status_code not in RETRYABLE_STATUS_CODES or retry_count >= self.max_retries:
+                break
+
+            delay = self._retry_delay_seconds(response, retry_count)
+            if delay > 0:
+                time.sleep(delay)
+            retry_count += 1
+
         if response.is_error:
             raise TiendaNubeApiError(f"Fallo la llamada {path} ({response.status_code}): {response.text.strip()}")
 
@@ -143,3 +164,31 @@ class TiendaNubeApiClient:
             return response.json()
         except ValueError as exc:
             raise TiendaNubeApiError(f"La API de Tienda Nube devolvio JSON invalido para {path}.") from exc
+
+    def _retry_delay_seconds(self, response: httpx.Response, retry_count: int) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            parsed_retry_after = self._parse_retry_after(retry_after)
+            if parsed_retry_after is not None:
+                return min(parsed_retry_after, self.retry_max_delay_seconds)
+
+        delay = self.retry_base_delay_seconds * (2**retry_count)
+        return min(delay, self.retry_max_delay_seconds)
+
+    @staticmethod
+    def _parse_retry_after(value: str) -> float | None:
+        clean_value = value.strip()
+        if not clean_value:
+            return None
+        try:
+            return max(float(clean_value), 0.0)
+        except ValueError:
+            pass
+
+        try:
+            target = parsedate_to_datetime(clean_value)
+        except (TypeError, ValueError):
+            return None
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        return max((target - datetime.now(timezone.utc)).total_seconds(), 0.0)

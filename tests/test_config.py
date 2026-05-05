@@ -66,6 +66,8 @@ publish_with_stock_only = true
 min_stock_to_publish = 2
 free_shipping = false
 product_physical = true
+allowed_categories = ["Tecnologia", "Audio y TV"]
+excluded_categories = ["Hogar"]
 
 [content]
 default_brand_when_empty = "Generica"
@@ -105,6 +107,8 @@ test_product_limit = 5
     assert config.pricing.usd_exchange_override == 1400.0
     assert config.pricing.cost_field_mode == "ars_neto"
     assert config.publication.min_stock_to_publish == 2
+    assert config.publication.allowed_categories == ("Tecnologia", "Audio y TV")
+    assert config.publication.excluded_categories == ("Hogar",)
     assert config.content.default_brand_when_empty == "Generica"
     assert config.diff.price_tolerance_ars == 1.5
     assert config.output.include_xlsx is False

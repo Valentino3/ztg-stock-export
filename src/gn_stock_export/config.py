@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 import tomllib
+import unicodedata
 
 
 class ConfigError(ValueError):
@@ -51,6 +52,8 @@ class PublicationConfig:
     min_stock_to_publish: int
     free_shipping: bool
     product_physical: bool
+    allowed_categories: tuple[str, ...] = ()
+    excluded_categories: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -204,6 +207,8 @@ def _load_sectioned_config(raw: dict[str, object], root_dir: Path) -> AppConfig:
         min_stock_to_publish=_require_int(publication_raw, "min_stock_to_publish"),
         free_shipping=_require_bool(publication_raw, "free_shipping"),
         product_physical=_require_bool(publication_raw, "product_physical"),
+        allowed_categories=_optional_string_tuple(publication_raw, "allowed_categories"),
+        excluded_categories=_optional_string_tuple(publication_raw, "excluded_categories"),
     )
     content = ContentConfig(
         default_brand_when_empty=_optional_string(content_raw, "default_brand_when_empty"),
@@ -306,6 +311,17 @@ def _validate_config(config: AppConfig) -> AppConfig:
         raise ConfigError("Debe existir una fuente de cotizacion USD: API o override manual.")
     if publication.min_stock_to_publish < 0:
         raise ConfigError("`publication.min_stock_to_publish` no puede ser negativo.")
+    repeated_categories = {
+        _normalize_category_filter_key(category)
+        for category in publication.allowed_categories
+        if _normalize_category_filter_key(category)
+    } & {
+        _normalize_category_filter_key(category)
+        for category in publication.excluded_categories
+        if _normalize_category_filter_key(category)
+    }
+    if repeated_categories:
+        raise ConfigError("Una categoria no puede estar al mismo tiempo en `allowed_categories` y `excluded_categories`.")
     if content.seo_title_max_length <= 0:
         raise ConfigError("`content.seo_title_max_length` debe ser mayor a 0.")
     if content.seo_description_max_length <= 0:
@@ -346,7 +362,7 @@ def _serialize_public(value: Any) -> Any:
         return str(value)
     if isinstance(value, dict):
         return {key: _serialize_public(item) for key, item in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_serialize_public(item) for item in value]
     return value
 
@@ -413,6 +429,23 @@ def _optional_string(raw: dict[str, object], key: str) -> str:
     return value.strip()
 
 
+def _optional_string_tuple(raw: dict[str, object], key: str) -> tuple[str, ...]:
+    value = raw.get(key)
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ConfigError(f"`{key}` debe ser una lista de textos.")
+
+    clean_values: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ConfigError(f"`{key}` debe ser una lista de textos.")
+        clean_item = item.strip()
+        if clean_item:
+            clean_values.append(clean_item)
+    return tuple(clean_values)
+
+
 def _require_bool(raw: dict[str, object], key: str) -> bool:
     value = raw.get(key)
     if not isinstance(value, bool):
@@ -427,3 +460,9 @@ def _optional_bool(raw: dict[str, object], key: str, default: bool) -> bool:
     if not isinstance(value, bool):
         raise ConfigError(f"`{key}` debe ser booleano.")
     return value
+
+
+def _normalize_category_filter_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    return " ".join(ascii_value.casefold().strip().split())
