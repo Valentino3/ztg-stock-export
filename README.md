@@ -107,6 +107,7 @@ Tambien hay accesos directos listos para usar:
 - `probar_sync_tiendanube.bat`: simula el sync completo por API sin escribir en la tienda
 - `sincronizar_tiendanube.bat`: sincroniza productos GN en Tienda Nube
 - `sincronizar_imagenes_tiendanube.bat`: sincroniza solo imagenes GN sobre productos ya gestionados
+- `probar_borrado_tiendanube.bat`: simula el borrado total de productos sin escribir cambios
 
 ### Comparar snapshots
 
@@ -182,6 +183,22 @@ Sincroniza solo imagenes GN sobre productos ya administrados por la app:
 ```bash
 ./.venv/Scripts/python.exe -m gn_stock_export sync-tiendanube-images
 ```
+
+### Borrar productos de Tienda Nube para reiniciar una prueba
+
+Primero revisar que productos se borrarian, sin tocar la tienda:
+
+```bash
+./.venv/Scripts/python.exe -m gn_stock_export clear-tiendanube-test
+```
+
+Si el reporte esta bien y realmente queres borrar TODOS los productos de la tienda:
+
+```bash
+./.venv/Scripts/python.exe -m gn_stock_export clear-tiendanube --confirm BORRAR_TODOS_LOS_PRODUCTOS
+```
+
+Esta accion es destructiva y no distingue productos `GN_SYNC` de productos cargados manualmente. Usarla solo en tiendas de prueba o cuando se quiera reiniciar todo el catalogo.
 
 ## Servidor Linux Con Cron
 

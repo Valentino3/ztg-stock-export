@@ -93,4 +93,4 @@ unpublish_missing = true
 # Politica de imagenes. Por ahora solo soporta `append_only`.
 image_mode = "append_only"
 # Cantidad maxima de productos a revisar en el dry-run de Tienda Nube. `0` usa todos.
-test_product_limit = 20
+test_product_limit = 0

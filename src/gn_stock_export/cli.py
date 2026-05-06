@@ -11,8 +11,9 @@ from gn_stock_export.config import (
     load_credentials,
     load_tiendanube_credentials,
 )
-from gn_stock_export.service import StockExportService, TiendaNubeSyncResult
+from gn_stock_export.service import StockExportService, TiendaNubeCleanupResult, TiendaNubeSyncResult
 from gn_stock_export.storage import SnapshotError
+from gn_stock_export.tiendanube_cleanup import DELETE_ALL_CONFIRMATION
 
 
 app = typer.Typer(
@@ -22,9 +23,21 @@ app = typer.Typer(
 )
 
 
-def _build_service(config_path: Path, env_path: Path | None, *, require_tiendanube: bool = False) -> StockExportService:
+def _build_service(
+    config_path: Path,
+    env_path: Path | None,
+    *,
+    require_gn: bool = True,
+    require_tiendanube: bool = False,
+) -> StockExportService:
     config = load_app_config(config_path)
-    credentials = load_credentials(env_path) if env_path else None
+    credentials = None
+    if env_path:
+        try:
+            credentials = load_credentials(env_path)
+        except CredentialsError:
+            if require_gn:
+                raise
     tiendanube_credentials = None
     if env_path:
         try:
@@ -169,6 +182,41 @@ def sync_tiendanube_images_command(
     _render_tiendanube_sync_result(result)
 
 
+@app.command("clear-tiendanube-test")
+def clear_tiendanube_test_command(
+    config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),
+    env_path: Path = typer.Option(Path(".env"), "--env-file", help="Ruta al archivo .env."),
+) -> None:
+    """Lista todos los productos que se borrarian de Tienda Nube sin borrar nada."""
+    try:
+        service = _build_service(config_path, env_path, require_gn=False, require_tiendanube=True)
+        result = service.clear_tiendanube_products(dry_run=True)
+    except (ConfigError, CredentialsError, SnapshotError, RuntimeError, ValueError) as exc:
+        _abort_with_error(str(exc))
+
+    _render_tiendanube_cleanup_result(result)
+
+
+@app.command("clear-tiendanube")
+def clear_tiendanube_command(
+    config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),
+    env_path: Path = typer.Option(Path(".env"), "--env-file", help="Ruta al archivo .env."),
+    confirm: str = typer.Option(
+        "",
+        "--confirm",
+        help=f"Confirmacion obligatoria: {DELETE_ALL_CONFIRMATION}",
+    ),
+) -> None:
+    """Borra TODOS los productos de Tienda Nube. Usar solo para reiniciar una tienda de prueba."""
+    try:
+        service = _build_service(config_path, env_path, require_gn=False, require_tiendanube=True)
+        result = service.clear_tiendanube_products(dry_run=False, confirm=confirm)
+    except (ConfigError, CredentialsError, SnapshotError, RuntimeError, ValueError) as exc:
+        _abort_with_error(str(exc))
+
+    _render_tiendanube_cleanup_result(result)
+
+
 @app.command("compare")
 def compare_command(
     config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),
@@ -224,6 +272,15 @@ def _render_tiendanube_sync_result(result: TiendaNubeSyncResult) -> None:
     typer.echo(f"Cotizacion USD usada: {result.usd_exchange}")
     typer.echo(f"Snapshot sync: {result.snapshot_path}")
     typer.echo(f"Estado local: {result.state_path}")
+    for label, path in result.report_paths.items():
+        typer.echo(f"{label.upper()}: {path}")
+    for status, count in result.counts.items():
+        typer.echo(f"{status}: {count}")
+
+
+def _render_tiendanube_cleanup_result(result: TiendaNubeCleanupResult) -> None:
+    typer.echo(f"Borrado Tienda Nube evaluado sobre {result.row_count} productos")
+    typer.echo(f"Modo: {'dry-run' if result.dry_run else 'productivo'}")
     for label, path in result.report_paths.items():
         typer.echo(f"{label.upper()}: {path}")
     for status, count in result.counts.items():

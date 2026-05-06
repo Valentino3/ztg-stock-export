@@ -88,3 +88,20 @@ def test_tiendanube_api_client_raises_after_429_retry_exhaustion() -> None:
             client.list_products()
 
     assert calls == 2
+
+
+def test_tiendanube_api_client_deletes_product() -> None:
+    credentials = TiendaNubeCredentials(
+        store_id=12345,
+        access_token="token-abc",
+        user_agent="gn-stock-export-tests",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert request.url.path == "/v1/12345/products/99"
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(handler)
+    with TiendaNubeApiClient(credentials=credentials, transport=transport) as client:
+        client.delete_product(99)

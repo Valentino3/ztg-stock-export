@@ -124,6 +124,9 @@ class TiendaNubeApiClient:
             raise TiendaNubeApiError("La API de Tienda Nube devolvio una imagen invalida al crear.")
         return response_payload
 
+    def delete_product(self, product_id: int) -> None:
+        self._request_json("DELETE", f"/products/{product_id}")
+
     def _request_json(
         self,
         method: str,

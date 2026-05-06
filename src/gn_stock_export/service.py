@@ -23,6 +23,7 @@ from gn_stock_export.storage import (
     timestamp_slug,
 )
 from gn_stock_export.tiendanube_api import TiendaNubeApiClient
+from gn_stock_export.tiendanube_cleanup import TiendaNubeCleanupRun, run_tiendanube_cleanup
 from gn_stock_export.tiendanube_sync import TiendaNubeSyncRun, run_tiendanube_sync
 
 
@@ -76,6 +77,15 @@ class TiendaNubeSyncResult:
     state_path: Path
     row_count: int
     usd_exchange: float
+    dry_run: bool
+    counts: dict[str, int]
+
+
+@dataclass
+class TiendaNubeCleanupResult:
+    generated_at: datetime
+    report_paths: dict[str, Path]
+    row_count: int
     dry_run: bool
     counts: dict[str, int]
 
@@ -254,6 +264,25 @@ class StockExportService:
 
     def sync_tiendanube_images(self) -> TiendaNubeSyncResult:
         return self._sync_tiendanube(dry_run=False, limit=None, images_only=True)
+
+    def clear_tiendanube_products(self, *, dry_run: bool, confirm: str = "") -> TiendaNubeCleanupResult:
+        if self.tiendanube_credentials is None:
+            raise ValueError("Las credenciales de Tienda Nube son obligatorias para borrar productos.")
+
+        cleanup_run: TiendaNubeCleanupRun = run_tiendanube_cleanup(
+            config=self.config,
+            credentials=self.tiendanube_credentials,
+            dry_run=dry_run,
+            confirm=confirm,
+            api_client_class=self.tiendanube_api_client_class,
+        )
+        return TiendaNubeCleanupResult(
+            generated_at=cleanup_run.generated_at,
+            report_paths=cleanup_run.report_paths,
+            row_count=cleanup_run.row_count,
+            dry_run=cleanup_run.dry_run,
+            counts=cleanup_run.counts,
+        )
 
     def _sync_tiendanube(self, *, dry_run: bool, limit: int | None, images_only: bool) -> TiendaNubeSyncResult:
         if self.credentials is None:
