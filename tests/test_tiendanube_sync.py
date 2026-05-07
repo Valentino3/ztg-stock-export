@@ -14,6 +14,7 @@ from gn_stock_export.config import (
     TiendaNubeSyncConfig,
 )
 from gn_stock_export.service import StockExportService
+from gn_stock_export.tiendanube_api import TiendaNubeApiError
 
 
 def test_sync_tiendanube_test_generates_dry_run_report(tmp_path: Path) -> None:
@@ -263,6 +264,120 @@ def test_sync_tiendanube_unpublishes_managed_products_missing_in_gn(tmp_path: Pa
     assert result.counts["UNPUBLISHED"] == 1
     assert FakeTiendaNubeApiClient.update_product_calls == 1
     assert FakeTiendaNubeApiClient.update_variant_calls == 1
+
+
+def test_sync_tiendanube_writes_image_failure_report(tmp_path: Path) -> None:
+    class FakeGNApiClient:
+        def __init__(self, credentials: Credentials) -> None:
+            self.credentials = credentials
+
+        def __enter__(self) -> "FakeGNApiClient":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get_catalog(self) -> list[dict[str, object]]:
+            return [_catalog_item()]
+
+        def get_usd_exchange(self) -> float:
+            return 1000.0
+
+    class FakeTiendaNubeApiClient:
+        def __init__(self, credentials: TiendaNubeCredentials) -> None:
+            self.credentials = credentials
+
+        def __enter__(self) -> "FakeTiendaNubeApiClient":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def list_all_products(self) -> list[dict[str, object]]:
+            return []
+
+        def create_product(self, payload: dict[str, object]) -> dict[str, object]:
+            return {
+                "id": 101,
+                "handle": {"es": payload["handle"]["es"]},
+                "tags": payload["tags"],
+                "variants": [{"id": 501}],
+            }
+
+        def create_product_image(self, product_id: int, src: str, *, position: int | None = None) -> dict[str, object]:
+            raise TiendaNubeApiError("imagen rechazada")
+
+    service = StockExportService(
+        workspace_dir=tmp_path,
+        config=_make_sync_config(tmp_path, test_limit=20),
+        credentials=Credentials(client_id=1, username="demo", password="secret"),
+        tiendanube_credentials=TiendaNubeCredentials(store_id=10, access_token="token", user_agent="tests"),
+        api_client_class=FakeGNApiClient,
+        tiendanube_api_client_class=FakeTiendaNubeApiClient,
+    )
+
+    result = service.sync_tiendanube()
+
+    assert result.counts["CREATED"] == 1
+    assert result.report_paths["image_failures_csv"].exists()
+    failure_report = result.report_paths["image_failures_csv"].read_text(encoding="utf-8-sig")
+    assert "https://example.com/image-1.jpg" in failure_report
+    assert "UPLOAD_ERROR" in failure_report
+
+
+def test_sync_tiendanube_failed_images_retries_only_reported_failures(tmp_path: Path) -> None:
+    class FakeTiendaNubeApiClient:
+        uploaded_urls: list[str] = []
+
+        def __init__(self, credentials: TiendaNubeCredentials) -> None:
+            self.credentials = credentials
+
+        def __enter__(self) -> "FakeTiendaNubeApiClient":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def list_all_products(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "id": 101,
+                    "name": {"es": "Producto demo"},
+                    "handle": {"es": "gn-1"},
+                    "tags": "GN_SYNC",
+                    "variants": [{"id": 501}],
+                }
+            ]
+
+        def create_product_image(self, product_id: int, src: str, *, position: int | None = None) -> dict[str, object]:
+            type(self).uploaded_urls.append(src)
+            return {"id": 900, "product_id": product_id, "src": src}
+
+    failures_path = tmp_path / "failures.csv"
+    failures_path.write_text(
+        "\n".join(
+            [
+                "item_id;handle;name;product_id;image_url;failure_type;error",
+                "1;gn-1;Producto demo;101;https://example.com/image-1.jpg;UPLOAD_ERROR;imagen rechazada",
+                "1;gn-1;Producto demo;101;not-a-url;INVALID_URL;URL invalida.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    service = StockExportService(
+        workspace_dir=tmp_path,
+        config=_make_sync_config(tmp_path, test_limit=20),
+        tiendanube_credentials=TiendaNubeCredentials(store_id=10, access_token="token", user_agent="tests"),
+        tiendanube_api_client_class=FakeTiendaNubeApiClient,
+    )
+
+    result = service.sync_tiendanube_failed_images(failures_path=failures_path)
+
+    assert result.row_count == 2
+    assert result.counts["RETRIED"] == 1
+    assert result.counts["SKIP_NOT_RETRYABLE"] == 1
+    assert FakeTiendaNubeApiClient.uploaded_urls == ["https://example.com/image-1.jpg"]
+    assert result.report_paths["csv"].exists()
 
 
 def _make_sync_config(tmp_path: Path, *, test_limit: int, with_category_id: bool = True) -> AppConfig:

@@ -18,10 +18,11 @@ echo 6. Probar flujo completo
 echo 7. Probar sync Tienda Nube
 echo 8. Sincronizar Tienda Nube
 echo 9. Sincronizar imagenes Tienda Nube
-echo 10. Probar borrado total Tienda Nube
-echo 11. Editar config.toml
-echo 12. Abrir carpeta exports
-echo 13. Salir
+echo 10. Reintentar imagenes fallidas Tienda Nube
+echo 11. Probar borrado total Tienda Nube
+echo 12. Editar config.toml
+echo 13. Abrir carpeta exports
+echo 14. Salir
 echo.
 set /p opcion=Elegi una opcion y presiona Enter: 
 
@@ -62,19 +63,23 @@ if "%opcion%"=="9" (
     goto menu
 )
 if "%opcion%"=="10" (
-    call probar_borrado_tiendanube.bat
+    call reintentar_imagenes_tiendanube.bat
     goto menu
 )
 if "%opcion%"=="11" (
-    notepad "config.toml"
+    call probar_borrado_tiendanube.bat
     goto menu
 )
 if "%opcion%"=="12" (
+    notepad "config.toml"
+    goto menu
+)
+if "%opcion%"=="13" (
     if not exist "exports" mkdir "exports"
     start "" "exports"
     goto menu
 )
-if "%opcion%"=="13" (
+if "%opcion%"=="14" (
     exit /b 0
 )
 

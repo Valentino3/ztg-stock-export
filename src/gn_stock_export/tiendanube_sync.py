@@ -27,6 +27,16 @@ class TiendaNubeSyncRun:
 
 
 @dataclass
+class TiendaNubeImageRetryRun:
+    generated_at: datetime
+    failures_path: Path
+    row_count: int
+    report_paths: dict[str, Path]
+    state_path: Path
+    counts: dict[str, int]
+
+
+@dataclass
 class _StateEntry:
     item_id: str
     handle: str
@@ -162,6 +172,7 @@ def _sync_single_product(
             variant_id=_as_int(created_variant.get("id")),
             image_count=len(image_result["new_images"]),
             details=image_result["details"] or "Producto creado correctamente.",
+            image_failures=image_result["image_failures"],
         )
 
     if not _has_managed_tag(existing, config.tiendanube_sync.managed_tag):
@@ -195,6 +206,7 @@ def _sync_single_product(
                 variant_id=_as_int(existing_variant.get("id")),
                 image_count=len(image_result["new_images"]),
                 details=image_result["details"],
+                image_failures=image_result["image_failures"],
             )
 
         state[product.handle] = _StateEntry(
@@ -214,6 +226,7 @@ def _sync_single_product(
             variant_id=_as_int(existing_variant.get("id")),
             image_count=len(image_result["new_images"]),
             details=image_result["details"],
+            image_failures=image_result["image_failures"],
         )
 
     if dry_run:
@@ -228,6 +241,7 @@ def _sync_single_product(
             variant_id=_as_int(existing_variant.get("id")),
             image_count=len(image_result["new_images"]),
             details=", ".join(changes) if changes else "Sin cambios.",
+            image_failures=image_result["image_failures"],
         )
 
     if base_changes:
@@ -258,6 +272,48 @@ def _sync_single_product(
         variant_id=_as_int(existing_variant.get("id")),
         image_count=len(image_result["new_images"]),
         details=", ".join(changes) if changes else "Sin cambios.",
+        image_failures=image_result["image_failures"],
+    )
+
+
+def run_tiendanube_failed_image_retry(
+    *,
+    config: AppConfig,
+    credentials: TiendaNubeCredentials,
+    workspace_dir: Path,
+    failures_path: Path | None = None,
+    api_client_class: type[TiendaNubeApiClient] = TiendaNubeApiClient,
+) -> TiendaNubeImageRetryRun:
+    generated_at = datetime.now(timezone.utc)
+    report_dir = ensure_directory(config.output.output_dir / "tiendanube_sync")
+    failures_path = failures_path or _latest_image_failures_path(report_dir)
+    failures = _read_image_failure_report(failures_path)
+    state_path = workspace_dir / "snapshots" / "tiendanube_sync_state.json"
+    state = _load_sync_state(state_path)
+    report_rows: list[dict[str, object]] = []
+
+    with api_client_class(credentials=credentials) as client:
+        all_products = client.list_all_products()
+        all_by_handle = {handle: product for product in all_products if (handle := _extract_handle(product))}
+
+        for failure in failures:
+            row = _retry_failed_image(
+                client=client,
+                failure=failure,
+                all_by_handle=all_by_handle,
+                state=state,
+            )
+            report_rows.append(row)
+
+    _save_sync_state(state_path, state)
+    report_paths, counts = _write_image_retry_report(report_rows, generated_at, report_dir)
+    return TiendaNubeImageRetryRun(
+        generated_at=generated_at,
+        failures_path=failures_path,
+        row_count=len(failures),
+        report_paths=report_paths,
+        state_path=state_path,
+        counts=counts,
     )
 
 
@@ -334,6 +390,7 @@ def _sync_images(
         return {
             "new_images": [],
             "uploaded_gn_images": uploaded,
+            "image_failures": [],
             "details": "Producto sin imagenes GN.",
         }
 
@@ -344,6 +401,7 @@ def _sync_images(
         return {
             "new_images": [],
             "uploaded_gn_images": uploaded,
+            "image_failures": _image_failure_entries(invalid_images, "INVALID_URL", "URL invalida."),
             "details": _join_detail_parts(
                 [
                     "No hay imagenes nuevas para sincronizar.",
@@ -355,6 +413,7 @@ def _sync_images(
         return {
             "new_images": new_images,
             "uploaded_gn_images": uploaded,
+            "image_failures": _image_failure_entries(invalid_images, "INVALID_URL", "URL invalida."),
             "details": _join_detail_parts(
                 [
                     f"Se subirian {len(new_images)} imagen(es).",
@@ -363,18 +422,25 @@ def _sync_images(
             ),
         }
 
-    failed_images: list[str] = []
+    failed_images: list[dict[str, str]] = []
     for index, image_url in enumerate(new_images, start=len(uploaded) + 1):
         try:
             client.create_product_image(product_id, image_url, position=index)
-        except TiendaNubeApiError:
-            failed_images.append(image_url)
+        except TiendaNubeApiError as exc:
+            failed_images.append(
+                {
+                    "image_url": image_url,
+                    "failure_type": "UPLOAD_ERROR",
+                    "error": str(exc),
+                }
+            )
             continue
         uploaded.append(image_url)
 
     return {
         "new_images": new_images,
         "uploaded_gn_images": uploaded,
+        "image_failures": _image_failure_entries(invalid_images, "INVALID_URL", "URL invalida.") + failed_images,
         "details": _join_detail_parts(
             [
                 f"Se agregaron {len(uploaded) - (len(entry.uploaded_gn_images) if entry else 0)} imagen(es).",
@@ -388,6 +454,17 @@ def _sync_images(
 def _is_valid_image_url(value: str) -> bool:
     parsed = urlparse(_as_text(value))
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _image_failure_entries(urls: list[str], failure_type: str, error: str) -> list[dict[str, str]]:
+    return [
+        {
+            "image_url": url,
+            "failure_type": failure_type,
+            "error": error,
+        }
+        for url in urls
+    ]
 
 
 def _join_detail_parts(parts: list[str]) -> str:
@@ -581,6 +658,117 @@ def _save_sync_state(path: Path, state: dict[str, _StateEntry]) -> Path:
     return path
 
 
+def _latest_image_failures_path(report_dir: Path) -> Path:
+    candidates = sorted(report_dir.glob("tiendanube_image_failures_*.csv"))
+    if not candidates:
+        raise ValueError(f"No encontre reportes de imagenes fallidas en {report_dir}.")
+    return candidates[-1]
+
+
+def _read_image_failure_report(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        raise ValueError(f"No existe el reporte de imagenes fallidas: {path}")
+    frame = pd.read_csv(path, sep=";", keep_default_na=False)
+    required = {"item_id", "handle", "name", "product_id", "image_url", "failure_type", "error"}
+    if not required.issubset(frame.columns):
+        raise ValueError(f"El reporte {path} no tiene el formato esperado de imagenes fallidas.")
+    return [
+        {column: _as_text(row.get(column)) for column in frame.columns}
+        for _, row in frame.iterrows()
+    ]
+
+
+def _retry_failed_image(
+    *,
+    client: TiendaNubeApiClient,
+    failure: dict[str, str],
+    all_by_handle: dict[str, dict[str, Any]],
+    state: dict[str, _StateEntry],
+) -> dict[str, object]:
+    item_id = _as_text(failure.get("item_id"))
+    handle = _as_text(failure.get("handle"))
+    name = _as_text(failure.get("name"))
+    image_url = _as_text(failure.get("image_url"))
+    failure_type = _as_text(failure.get("failure_type"))
+
+    base_row = {
+        "item_id": item_id,
+        "handle": handle,
+        "name": name,
+        "product_id": _as_int(failure.get("product_id")),
+        "image_url": image_url,
+        "original_failure_type": failure_type,
+        "original_error": _as_text(failure.get("error")),
+    }
+
+    if failure_type != "UPLOAD_ERROR":
+        return {
+            **base_row,
+            "action": "SKIP",
+            "status": "SKIP_NOT_RETRYABLE",
+            "details": "La falla no es reintentable automaticamente.",
+        }
+    if not _is_valid_image_url(image_url):
+        return {
+            **base_row,
+            "action": "SKIP",
+            "status": "SKIP_INVALID_URL",
+            "details": "La URL de imagen sigue siendo invalida.",
+        }
+
+    product_id = _as_int(failure.get("product_id"))
+    existing = all_by_handle.get(handle)
+    if product_id <= 0 and existing is not None:
+        product_id = _as_int(existing.get("id"))
+    if product_id <= 0:
+        return {
+            **base_row,
+            "action": "SKIP",
+            "status": "NOT_FOUND_IN_TN",
+            "details": "No se encontro el producto en Tienda Nube para reintentar la imagen.",
+        }
+
+    entry = state.get(handle)
+    if entry and image_url in entry.uploaded_gn_images:
+        return {
+            **base_row,
+            "product_id": product_id,
+            "action": "SKIP",
+            "status": "ALREADY_UPLOADED",
+            "details": "La imagen ya figura como subida en el estado local.",
+        }
+
+    try:
+        client.create_product_image(product_id, image_url)
+    except TiendaNubeApiError as exc:
+        return {
+            **base_row,
+            "product_id": product_id,
+            "action": "RETRY_IMAGE",
+            "status": "FAILED_AGAIN",
+            "details": str(exc),
+        }
+
+    uploaded = list(entry.uploaded_gn_images) if entry else []
+    uploaded.append(image_url)
+    state[handle] = _StateEntry(
+        item_id=item_id,
+        handle=handle,
+        product_id=product_id,
+        variant_id=entry.variant_id if entry else None,
+        uploaded_gn_images=uploaded,
+        last_synced_at=datetime.now(timezone.utc).isoformat(),
+        last_result="RETRIED_IMAGE",
+    )
+    return {
+        **base_row,
+        "product_id": product_id,
+        "action": "RETRY_IMAGE",
+        "status": "RETRIED",
+        "details": "Imagen subida correctamente al reintentar.",
+    }
+
+
 def _write_sync_report(
     report_rows: list[dict[str, object]],
     generated_at: datetime,
@@ -594,7 +782,8 @@ def _write_sync_report(
     mode = "dry_run" if dry_run else "productivo"
     prefix = "tiendanube_sync_imagenes" if images_only else "tiendanube_sync"
 
-    details = pd.DataFrame(report_rows)
+    image_failure_rows = _collect_image_failure_rows(report_rows)
+    details = pd.DataFrame([{key: value for key, value in row.items() if key != "image_failures"} for row in report_rows])
     if details.empty:
         details = pd.DataFrame(columns=["item_id", "handle", "name", "action", "status", "product_id", "variant_id", "image_count", "details"])
     summary = (
@@ -629,7 +818,139 @@ def _write_sync_report(
         ),
         encoding="utf-8",
     )
-    return {"csv": csv_path, "xlsx": xlsx_path, "json": json_path}, counts
+    report_paths = {"csv": csv_path, "xlsx": xlsx_path, "json": json_path}
+    if image_failure_rows:
+        report_paths.update(_write_image_failure_report(image_failure_rows, generated_at, output_dir, dry_run=dry_run))
+    return report_paths, counts
+
+
+def _collect_image_failure_rows(report_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in report_rows:
+        failures = row.get("image_failures", [])
+        if not isinstance(failures, list):
+            continue
+        for failure in failures:
+            if not isinstance(failure, dict):
+                continue
+            rows.append(
+                {
+                    "item_id": row.get("item_id", ""),
+                    "handle": row.get("handle", ""),
+                    "name": row.get("name", ""),
+                    "product_id": row.get("product_id", ""),
+                    "image_url": failure.get("image_url", ""),
+                    "failure_type": failure.get("failure_type", ""),
+                    "error": failure.get("error", ""),
+                }
+            )
+    return rows
+
+
+def _write_image_failure_report(
+    rows: list[dict[str, object]],
+    generated_at: datetime,
+    output_dir: Path,
+    *,
+    dry_run: bool,
+) -> dict[str, Path]:
+    slug = timestamp_slug(generated_at)
+    mode = "dry_run" if dry_run else "productivo"
+    frame = pd.DataFrame(
+        rows,
+        columns=["item_id", "handle", "name", "product_id", "image_url", "failure_type", "error"],
+    )
+    csv_path = output_dir / f"tiendanube_image_failures_{mode}_{slug}.csv"
+    xlsx_path = output_dir / f"tiendanube_image_failures_{mode}_{slug}.xlsx"
+    json_path = output_dir / f"tiendanube_image_failures_{mode}_{slug}.json"
+    frame.to_csv(csv_path, index=False, sep=";", encoding="utf-8-sig")
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+        frame.to_excel(writer, sheet_name="imagenes_fallidas", index=False)
+        _format_worksheet(writer.book["imagenes_fallidas"])
+    json_path.write_text(
+        json.dumps(
+            {
+                "generated_at": generated_at.isoformat(),
+                "dry_run": dry_run,
+                "rows": rows,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "image_failures_csv": csv_path,
+        "image_failures_xlsx": xlsx_path,
+        "image_failures_json": json_path,
+    }
+
+
+def _write_image_retry_report(
+    rows: list[dict[str, object]],
+    generated_at: datetime,
+    output_dir: Path,
+) -> tuple[dict[str, Path], dict[str, int]]:
+    slug = timestamp_slug(generated_at)
+    frame = pd.DataFrame(
+        rows,
+        columns=[
+            "item_id",
+            "handle",
+            "name",
+            "product_id",
+            "image_url",
+            "original_failure_type",
+            "original_error",
+            "action",
+            "status",
+            "details",
+        ],
+    )
+    if frame.empty:
+        frame = pd.DataFrame(columns=[
+            "item_id",
+            "handle",
+            "name",
+            "product_id",
+            "image_url",
+            "original_failure_type",
+            "original_error",
+            "action",
+            "status",
+            "details",
+        ])
+    counts = frame["status"].value_counts().to_dict() if not frame.empty else {}
+    csv_path = output_dir / f"tiendanube_image_retry_{slug}.csv"
+    xlsx_path = output_dir / f"tiendanube_image_retry_{slug}.xlsx"
+    json_path = output_dir / f"tiendanube_image_retry_{slug}.json"
+    frame.to_csv(csv_path, index=False, sep=";", encoding="utf-8-sig")
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+        summary = (
+            frame.groupby("status", dropna=False)
+            .size()
+            .reset_index(name="count")
+            .sort_values(by=["count", "status"], ascending=[False, True], kind="stable")
+            if not frame.empty
+            else pd.DataFrame(columns=["status", "count"])
+        )
+        summary.to_excel(writer, sheet_name="resumen", index=False)
+        frame.to_excel(writer, sheet_name="detalle", index=False)
+        _format_worksheet(writer.book["resumen"])
+        _format_worksheet(writer.book["detalle"])
+    json_path.write_text(
+        json.dumps(
+            {
+                "generated_at": generated_at.isoformat(),
+                "counts": {str(key): int(value) for key, value in counts.items()},
+                "rows": rows,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return {"csv": csv_path, "xlsx": xlsx_path, "json": json_path}, {str(key): int(value) for key, value in counts.items()}
 
 
 def _format_worksheet(worksheet: object) -> None:
@@ -653,6 +974,7 @@ def _report_row(
     product_id: int | None = None,
     variant_id: int | None = None,
     image_count: int = 0,
+    image_failures: list[dict[str, str]] | None = None,
 ) -> dict[str, object]:
     return {
         "item_id": product.item_id,
@@ -664,6 +986,7 @@ def _report_row(
         "variant_id": variant_id,
         "image_count": image_count,
         "details": details,
+        "image_failures": image_failures or [],
     }
 
 

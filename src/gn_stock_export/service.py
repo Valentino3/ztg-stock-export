@@ -24,7 +24,12 @@ from gn_stock_export.storage import (
 )
 from gn_stock_export.tiendanube_api import TiendaNubeApiClient
 from gn_stock_export.tiendanube_cleanup import TiendaNubeCleanupRun, run_tiendanube_cleanup
-from gn_stock_export.tiendanube_sync import TiendaNubeSyncRun, run_tiendanube_sync
+from gn_stock_export.tiendanube_sync import (
+    TiendaNubeImageRetryRun,
+    TiendaNubeSyncRun,
+    run_tiendanube_failed_image_retry,
+    run_tiendanube_sync,
+)
 
 
 @dataclass
@@ -87,6 +92,16 @@ class TiendaNubeCleanupResult:
     report_paths: dict[str, Path]
     row_count: int
     dry_run: bool
+    counts: dict[str, int]
+
+
+@dataclass
+class TiendaNubeImageRetryResult:
+    generated_at: datetime
+    failures_path: Path
+    report_paths: dict[str, Path]
+    state_path: Path
+    row_count: int
     counts: dict[str, int]
 
 
@@ -264,6 +279,26 @@ class StockExportService:
 
     def sync_tiendanube_images(self) -> TiendaNubeSyncResult:
         return self._sync_tiendanube(dry_run=False, limit=None, images_only=True)
+
+    def sync_tiendanube_failed_images(self, failures_path: Path | None = None) -> TiendaNubeImageRetryResult:
+        if self.tiendanube_credentials is None:
+            raise ValueError("Las credenciales de Tienda Nube son obligatorias para reintentar imagenes.")
+
+        retry_run: TiendaNubeImageRetryRun = run_tiendanube_failed_image_retry(
+            config=self.config,
+            credentials=self.tiendanube_credentials,
+            workspace_dir=self.workspace_dir,
+            failures_path=failures_path,
+            api_client_class=self.tiendanube_api_client_class,
+        )
+        return TiendaNubeImageRetryResult(
+            generated_at=retry_run.generated_at,
+            failures_path=retry_run.failures_path,
+            report_paths=retry_run.report_paths,
+            state_path=retry_run.state_path,
+            row_count=retry_run.row_count,
+            counts=retry_run.counts,
+        )
 
     def clear_tiendanube_products(self, *, dry_run: bool, confirm: str = "") -> TiendaNubeCleanupResult:
         if self.tiendanube_credentials is None:

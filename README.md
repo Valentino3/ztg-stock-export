@@ -107,6 +107,7 @@ Tambien hay accesos directos listos para usar:
 - `probar_sync_tiendanube.bat`: simula el sync completo por API sin escribir en la tienda
 - `sincronizar_tiendanube.bat`: sincroniza productos GN en Tienda Nube
 - `sincronizar_imagenes_tiendanube.bat`: sincroniza solo imagenes GN sobre productos ya gestionados
+- `reintentar_imagenes_tiendanube.bat`: reintenta solo imagenes que fallaron en el ultimo reporte
 - `probar_borrado_tiendanube.bat`: simula el borrado total de productos sin escribir cambios
 
 ### Comparar snapshots
@@ -182,6 +183,19 @@ Sincroniza solo imagenes GN sobre productos ya administrados por la app:
 
 ```bash
 ./.venv/Scripts/python.exe -m gn_stock_export sync-tiendanube-images
+```
+
+Si algunas imagenes fallan, la app genera reportes `tiendanube_image_failures_*.csv/xlsx/json` en `exports/tiendanube_sync/`.
+Para reintentar solo esas imagenes fallidas:
+
+```bash
+./.venv/Scripts/python.exe -m gn_stock_export sync-tiendanube-images-failed
+```
+
+Tambien se puede pasar un reporte puntual:
+
+```bash
+./.venv/Scripts/python.exe -m gn_stock_export sync-tiendanube-images-failed --failures-file exports/tiendanube_sync/tiendanube_image_failures_productivo_YYYYMMDD_HHMMSS.csv
 ```
 
 ### Borrar productos de Tienda Nube para reiniciar una prueba

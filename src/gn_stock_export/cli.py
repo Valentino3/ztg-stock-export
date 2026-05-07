@@ -11,7 +11,12 @@ from gn_stock_export.config import (
     load_credentials,
     load_tiendanube_credentials,
 )
-from gn_stock_export.service import StockExportService, TiendaNubeCleanupResult, TiendaNubeSyncResult
+from gn_stock_export.service import (
+    StockExportService,
+    TiendaNubeCleanupResult,
+    TiendaNubeImageRetryResult,
+    TiendaNubeSyncResult,
+)
 from gn_stock_export.storage import SnapshotError
 from gn_stock_export.tiendanube_cleanup import DELETE_ALL_CONFIRMATION
 
@@ -182,6 +187,26 @@ def sync_tiendanube_images_command(
     _render_tiendanube_sync_result(result)
 
 
+@app.command("sync-tiendanube-images-failed")
+def sync_tiendanube_images_failed_command(
+    config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),
+    env_path: Path = typer.Option(Path(".env"), "--env-file", help="Ruta al archivo .env."),
+    failures_path: Path | None = typer.Option(
+        None,
+        "--failures-file",
+        help="Reporte CSV de imagenes fallidas. Si se omite, usa el ultimo disponible.",
+    ),
+) -> None:
+    """Reintenta solo las imagenes que fallaron en el ultimo reporte."""
+    try:
+        service = _build_service(config_path, env_path, require_gn=False, require_tiendanube=True)
+        result = service.sync_tiendanube_failed_images(failures_path=failures_path)
+    except (ConfigError, CredentialsError, SnapshotError, RuntimeError, ValueError) as exc:
+        _abort_with_error(str(exc))
+
+    _render_tiendanube_image_retry_result(result)
+
+
 @app.command("clear-tiendanube-test")
 def clear_tiendanube_test_command(
     config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),
@@ -281,6 +306,16 @@ def _render_tiendanube_sync_result(result: TiendaNubeSyncResult) -> None:
 def _render_tiendanube_cleanup_result(result: TiendaNubeCleanupResult) -> None:
     typer.echo(f"Borrado Tienda Nube evaluado sobre {result.row_count} productos")
     typer.echo(f"Modo: {'dry-run' if result.dry_run else 'productivo'}")
+    for label, path in result.report_paths.items():
+        typer.echo(f"{label.upper()}: {path}")
+    for status, count in result.counts.items():
+        typer.echo(f"{status}: {count}")
+
+
+def _render_tiendanube_image_retry_result(result: TiendaNubeImageRetryResult) -> None:
+    typer.echo(f"Reintento de imagenes Tienda Nube sobre {result.row_count} fallas")
+    typer.echo(f"Reporte origen: {result.failures_path}")
+    typer.echo(f"Estado local: {result.state_path}")
     for label, path in result.report_paths.items():
         typer.echo(f"{label.upper()}: {path}")
     for status, count in result.counts.items():

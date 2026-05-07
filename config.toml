@@ -7,7 +7,7 @@ use_api_usd_exchange = true
 # Si es `true`, usa el dolar manual de abajo en vez del de la API.
 use_usd_override = true
 # Valor manual del dolar cuando `use_usd_override = true`.
-usd_exchange_override = 1450.0
+usd_exchange_override = 1470.0
 # Porcentaje extra sobre el precio base que llega desde GN. Ejemplo: `60.0` suma 60%.
 margin_pct = 60.0
 # Monto fijo en pesos que se suma al precio antes del redondeo.
@@ -93,4 +93,4 @@ unpublish_missing = true
 # Politica de imagenes. Por ahora solo soporta `append_only`.
 image_mode = "append_only"
 # Cantidad maxima de productos a revisar en el dry-run de Tienda Nube. `0` usa todos.
-test_product_limit = 0
+test_product_limit =  50
