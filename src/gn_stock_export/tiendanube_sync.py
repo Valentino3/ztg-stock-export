@@ -326,6 +326,135 @@ def run_tiendanube_failed_image_retry(
     )
 
 
+def run_tiendanube_category_sync(
+    *,
+    stock_frame: pd.DataFrame,
+    config: AppConfig,
+    credentials: TiendaNubeCredentials,
+    workspace_dir: Path,
+    dry_run: bool,
+    limit: int | None = None,
+    api_client_class: type[TiendaNubeApiClient] = TiendaNubeApiClient,
+) -> TiendaNubeSyncRun:
+    if not config.tiendanube_sync.enabled:
+        raise ValueError("La sincronizacion con Tienda Nube esta deshabilitada en `config.toml`.")
+
+    generated_at = datetime.now(timezone.utc)
+    prepared_products = prepare_products(stock_frame, config)
+    if limit is not None and limit > 0:
+        prepared_products = prepared_products[:limit]
+
+    report_dir = ensure_directory(config.output.output_dir / "tiendanube_sync")
+    state_path = workspace_dir / "snapshots" / "tiendanube_sync_state.json"
+    report_rows: list[dict[str, object]] = []
+
+    with api_client_class(credentials=credentials) as client:
+        all_products = client.list_all_products()
+        all_by_handle = {handle: product for product in all_products if (handle := _extract_handle(product))}
+        prepared_products, category_rows = _ensure_product_categories(
+            client=client,
+            products=prepared_products,
+            dry_run=dry_run,
+        )
+        report_rows.extend(category_rows)
+
+        for product in prepared_products:
+            row = _sync_single_product_categories(
+                client=client,
+                product=product,
+                config=config,
+                dry_run=dry_run,
+                all_by_handle=all_by_handle,
+            )
+            report_rows.append(row)
+
+    report_paths, counts = _write_sync_report(
+        report_rows,
+        generated_at,
+        report_dir,
+        dry_run=dry_run,
+        images_only=False,
+        categories_only=True,
+    )
+    return TiendaNubeSyncRun(
+        generated_at=generated_at,
+        dry_run=dry_run,
+        row_count=len(prepared_products),
+        report_paths=report_paths,
+        state_path=state_path,
+        counts=counts,
+    )
+
+
+def _sync_single_product_categories(
+    *,
+    client: TiendaNubeApiClient,
+    product: PreparedProduct,
+    config: AppConfig,
+    dry_run: bool,
+    all_by_handle: dict[str, dict[str, Any]],
+) -> dict[str, object]:
+    existing = all_by_handle.get(product.handle)
+    if existing is None:
+        return _report_row(
+            product=product,
+            action="SKIP",
+            status="NOT_FOUND_IN_TN",
+            details="No existe el producto en Tienda Nube; este comando solo repara categorias de productos existentes.",
+        )
+
+    if not _has_managed_tag(existing, config.tiendanube_sync.managed_tag):
+        return _report_row(
+            product=product,
+            action="SKIP",
+            status="NOT_MANAGED",
+            product_id=_as_int(existing.get("id")),
+            details="Existe un producto con el mismo handle pero no esta marcado como gestionado por la app.",
+        )
+
+    if product.category_id is None:
+        return _report_row(
+            product=product,
+            action="SKIP",
+            status="CATEGORY_NOT_RESOLVED",
+            product_id=_as_int(existing.get("id")),
+            variant_id=_as_int(_extract_primary_variant(existing).get("id")),
+            details="No se pudo resolver una categoria real de Tienda Nube para este producto.",
+        )
+
+    existing_categories = sorted(_extract_category_ids(existing))
+    target_categories = [product.category_id]
+    if existing_categories == target_categories:
+        return _report_row(
+            product=product,
+            action="NOOP",
+            status="NO_CHANGES",
+            product_id=_as_int(existing.get("id")),
+            variant_id=_as_int(_extract_primary_variant(existing).get("id")),
+            details="La categoria ya estaba correcta.",
+        )
+
+    if dry_run:
+        return _report_row(
+            product=product,
+            action="UPDATE_CATEGORIES",
+            status="DRY_RUN_UPDATE_CATEGORIES",
+            product_id=_as_int(existing.get("id")),
+            variant_id=_as_int(_extract_primary_variant(existing).get("id")),
+            details=f"Se actualizarian categorias de {existing_categories} a {target_categories}.",
+        )
+
+    client.update_product(_as_int(existing.get("id")), {"categories": target_categories})
+    return _report_row(
+        product=product,
+        action="UPDATE_CATEGORIES",
+        status="UPDATED_CATEGORIES",
+        product_id=_as_int(existing.get("id")),
+        variant_id=_as_int(_extract_primary_variant(existing).get("id")),
+        details=f"Categorias actualizadas de {existing_categories} a {target_categories}.",
+    )
+
+
 def _ensure_product_categories(
     *,
     client: TiendaNubeApiClient,
@@ -948,11 +1077,17 @@ def _write_sync_report(
     *,
     dry_run: bool,
     images_only: bool,
+    categories_only: bool = False,
 ) -> tuple[dict[str, Path], dict[str, int]]:
     ensure_directory(output_dir)
     slug = timestamp_slug(generated_at)
     mode = "dry_run" if dry_run else "productivo"
-    prefix = "tiendanube_sync_imagenes" if images_only else "tiendanube_sync"
+    if categories_only:
+        prefix = "tiendanube_sync_categorias"
+    elif images_only:
+        prefix = "tiendanube_sync_imagenes"
+    else:
+        prefix = "tiendanube_sync"
 
     image_failure_rows = _collect_image_failure_rows(report_rows)
     details = pd.DataFrame([{key: value for key, value in row.items() if key != "image_failures"} for row in report_rows])
@@ -982,6 +1117,7 @@ def _write_sync_report(
                 "generated_at": generated_at.isoformat(),
                 "dry_run": dry_run,
                 "images_only": images_only,
+                "categories_only": categories_only,
                 "counts": counts,
                 "rows": report_rows,
             },

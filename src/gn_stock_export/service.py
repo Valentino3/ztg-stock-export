@@ -28,6 +28,7 @@ from gn_stock_export.tiendanube_sync import (
     TiendaNubeImageRetryRun,
     TiendaNubeSyncRun,
     run_tiendanube_failed_image_retry,
+    run_tiendanube_category_sync,
     run_tiendanube_sync,
 )
 
@@ -280,6 +281,12 @@ class StockExportService:
     def sync_tiendanube_images(self) -> TiendaNubeSyncResult:
         return self._sync_tiendanube(dry_run=False, limit=None, images_only=True)
 
+    def sync_tiendanube_categories_test(self) -> TiendaNubeSyncResult:
+        return self._sync_tiendanube_categories(dry_run=True, limit=self.config.tiendanube_sync.test_product_limit)
+
+    def sync_tiendanube_categories(self) -> TiendaNubeSyncResult:
+        return self._sync_tiendanube_categories(dry_run=False, limit=None)
+
     def sync_tiendanube_failed_images(self, failures_path: Path | None = None) -> TiendaNubeImageRetryResult:
         if self.tiendanube_credentials is None:
             raise ValueError("Las credenciales de Tienda Nube son obligatorias para reintentar imagenes.")
@@ -298,6 +305,39 @@ class StockExportService:
             state_path=retry_run.state_path,
             row_count=retry_run.row_count,
             counts=retry_run.counts,
+        )
+
+    def _sync_tiendanube_categories(self, *, dry_run: bool, limit: int | None) -> TiendaNubeSyncResult:
+        if self.credentials is None:
+            raise ValueError("Las credenciales de Grupo Nucleo son obligatorias para reparar categorias.")
+        if self.tiendanube_credentials is None:
+            raise ValueError("Las credenciales de Tienda Nube son obligatorias para reparar categorias.")
+
+        with self.api_client_class(self.credentials) as api:
+            catalog = api.get_catalog()
+            usd_exchange = self._resolve_usd_exchange(api)
+
+        exported_at = datetime.now(timezone.utc)
+        frame = build_export_frame(catalog, usd_exchange, self.config, exported_at=exported_at)
+        snapshot_path = save_snapshot(frame, self.snapshot_dir / "tiendanube_sync", exported_at, usd_exchange, self.config)
+        sync_run: TiendaNubeSyncRun = run_tiendanube_category_sync(
+            stock_frame=frame,
+            config=self.config,
+            credentials=self.tiendanube_credentials,
+            workspace_dir=self.workspace_dir,
+            dry_run=dry_run,
+            limit=limit,
+            api_client_class=self.tiendanube_api_client_class,
+        )
+        return TiendaNubeSyncResult(
+            generated_at=sync_run.generated_at,
+            snapshot_path=snapshot_path,
+            report_paths=sync_run.report_paths,
+            state_path=sync_run.state_path,
+            row_count=sync_run.row_count,
+            usd_exchange=usd_exchange,
+            dry_run=sync_run.dry_run,
+            counts=sync_run.counts,
         )
 
     def clear_tiendanube_products(self, *, dry_run: bool, confirm: str = "") -> TiendaNubeCleanupResult:

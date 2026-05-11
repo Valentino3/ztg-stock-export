@@ -186,6 +186,13 @@ Sincroniza solo imagenes GN sobre productos ya administrados por la app:
 ./.venv/Scripts/python.exe -m gn_stock_export sync-tiendanube-images
 ```
 
+Repara categorias reales en productos GN ya existentes en Tienda Nube, sin tocar precios, stock ni imagenes:
+
+```bash
+./.venv/Scripts/python.exe -m gn_stock_export sync-tiendanube-categories-test
+./.venv/Scripts/python.exe -m gn_stock_export sync-tiendanube-categories
+```
+
 Si algunas imagenes fallan, la app genera reportes `tiendanube_image_failures_*.csv/xlsx/json` en `exports/tiendanube_sync/`.
 Para reintentar solo esas imagenes fallidas:
 

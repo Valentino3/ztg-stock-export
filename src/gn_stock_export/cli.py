@@ -187,6 +187,36 @@ def sync_tiendanube_images_command(
     _render_tiendanube_sync_result(result)
 
 
+@app.command("sync-tiendanube-categories-test")
+def sync_tiendanube_categories_test_command(
+    config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),
+    env_path: Path = typer.Option(Path(".env"), "--env-file", help="Ruta al archivo .env."),
+) -> None:
+    """Analiza la reparacion masiva de categorias sin escribir cambios reales."""
+    try:
+        service = _build_service(config_path, env_path, require_tiendanube=True)
+        result = service.sync_tiendanube_categories_test()
+    except (ConfigError, CredentialsError, SnapshotError, RuntimeError, ValueError) as exc:
+        _abort_with_error(str(exc))
+
+    _render_tiendanube_sync_result(result)
+
+
+@app.command("sync-tiendanube-categories")
+def sync_tiendanube_categories_command(
+    config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),
+    env_path: Path = typer.Option(Path(".env"), "--env-file", help="Ruta al archivo .env."),
+) -> None:
+    """Repara categorias reales en productos GN ya existentes en Tienda Nube."""
+    try:
+        service = _build_service(config_path, env_path, require_tiendanube=True)
+        result = service.sync_tiendanube_categories()
+    except (ConfigError, CredentialsError, SnapshotError, RuntimeError, ValueError) as exc:
+        _abort_with_error(str(exc))
+
+    _render_tiendanube_sync_result(result)
+
+
 @app.command("sync-tiendanube-images-failed")
 def sync_tiendanube_images_failed_command(
     config_path: Path = typer.Option(Path("config.toml"), "--config", help="Ruta al config.toml."),
