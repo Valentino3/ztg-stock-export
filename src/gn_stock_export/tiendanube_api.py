@@ -16,6 +16,13 @@ class TiendaNubeApiError(RuntimeError):
 
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+RETRYABLE_EXCEPTIONS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+)
 
 
 @dataclass
@@ -87,6 +94,33 @@ class TiendaNubeApiClient:
                 return products
             page += 1
 
+    def list_categories(self, *, page: int = 1, per_page: int = 200) -> list[dict[str, Any]]:
+        payload = self._request_json("GET", "/categories", params={"page": page, "per_page": per_page})
+        if not isinstance(payload, list):
+            raise TiendaNubeApiError("La API de Tienda Nube devolvio categorias con formato invalido.")
+        return payload
+
+    def list_all_categories(self, *, per_page: int = 200) -> list[dict[str, Any]]:
+        page = 1
+        categories: list[dict[str, Any]] = []
+        while True:
+            chunk = self.list_categories(page=page, per_page=per_page)
+            if not chunk:
+                return categories
+            categories.extend(chunk)
+            if len(chunk) < per_page:
+                return categories
+            page += 1
+
+    def create_category(self, name: str, *, parent_id: int | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"name": {"es": name}}
+        if parent_id is not None:
+            payload["parent"] = parent_id
+        response_payload = self._request_json("POST", "/categories", json=payload)
+        if not isinstance(response_payload, dict):
+            raise TiendaNubeApiError("La API de Tienda Nube devolvio una categoria invalida al crear.")
+        return response_payload
+
     def create_product(self, payload: dict[str, Any]) -> dict[str, Any]:
         response_payload = self._request_json("POST", "/products", json=payload)
         if not isinstance(response_payload, dict):
@@ -141,13 +175,27 @@ class TiendaNubeApiClient:
 
         retry_count = 0
         while True:
-            response = self._client.request(
-                method,
-                path,
-                params=params,
-                json=json,
-                headers=headers,
-            )
+            try:
+                response = self._client.request(
+                    method,
+                    path,
+                    params=params,
+                    json=json,
+                    headers=headers,
+                )
+            except RETRYABLE_EXCEPTIONS as exc:
+                if retry_count >= self.max_retries:
+                    raise TiendaNubeApiError(
+                        f"Fallo la llamada {path}: la API no respondio despues de "
+                        f"{self.max_retries + 1} intentos ({exc})."
+                    ) from exc
+
+                delay = self._backoff_delay_seconds(retry_count)
+                if delay > 0:
+                    time.sleep(delay)
+                retry_count += 1
+                continue
+
             if not response.is_error:
                 break
             if response.status_code not in RETRYABLE_STATUS_CODES or retry_count >= self.max_retries:
@@ -175,6 +223,10 @@ class TiendaNubeApiClient:
             if parsed_retry_after is not None:
                 return min(parsed_retry_after, self.retry_max_delay_seconds)
 
+        delay = self.retry_base_delay_seconds * (2**retry_count)
+        return min(delay, self.retry_max_delay_seconds)
+
+    def _backoff_delay_seconds(self, retry_count: int) -> float:
         delay = self.retry_base_delay_seconds * (2**retry_count)
         return min(delay, self.retry_max_delay_seconds)
 

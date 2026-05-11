@@ -139,7 +139,7 @@ def test_sync_tiendanube_creates_product_and_persists_state(tmp_path: Path) -> N
     assert payload["products"]["gn-1"]["uploaded_gn_images"] == ["https://example.com/image-1.jpg"]
 
 
-def test_sync_tiendanube_creates_product_without_category_mapping(tmp_path: Path) -> None:
+def test_sync_tiendanube_auto_creates_missing_categories_and_assigns_product(tmp_path: Path) -> None:
     class FakeGNApiClient:
         def __init__(self, credentials: Credentials) -> None:
             self.credentials = credentials
@@ -158,6 +158,7 @@ def test_sync_tiendanube_creates_product_without_category_mapping(tmp_path: Path
 
     class FakeTiendaNubeApiClient:
         last_payload: dict[str, object] | None = None
+        created_categories: list[dict[str, object]] = []
 
         def __init__(self, credentials: TiendaNubeCredentials) -> None:
             self.credentials = credentials
@@ -170,6 +171,15 @@ def test_sync_tiendanube_creates_product_without_category_mapping(tmp_path: Path
 
         def list_all_products(self) -> list[dict[str, object]]:
             return []
+
+        def list_all_categories(self) -> list[dict[str, object]]:
+            return []
+
+        def create_category(self, name: str, *, parent_id: int | None = None) -> dict[str, object]:
+            category_id = 201 + len(type(self).created_categories)
+            category = {"id": category_id, "name": {"es": name}, "parent": parent_id}
+            type(self).created_categories.append(category)
+            return category
 
         def create_product(self, payload: dict[str, object]) -> dict[str, object]:
             type(self).last_payload = payload
@@ -196,8 +206,13 @@ def test_sync_tiendanube_creates_product_without_category_mapping(tmp_path: Path
     result = service.sync_tiendanube()
 
     assert result.counts["CREATED"] == 1
+    assert result.counts["CREATED_CATEGORY"] == 2
+    assert FakeTiendaNubeApiClient.created_categories == [
+        {"id": 201, "name": {"es": "TN Categoria"}, "parent": None},
+        {"id": 202, "name": {"es": "TN Subcategoria"}, "parent": 201},
+    ]
     assert FakeTiendaNubeApiClient.last_payload is not None
-    assert "categories" not in FakeTiendaNubeApiClient.last_payload
+    assert FakeTiendaNubeApiClient.last_payload["categories"] == [202]
 
 
 def test_sync_tiendanube_unpublishes_managed_products_missing_in_gn(tmp_path: Path) -> None:
@@ -264,6 +279,71 @@ def test_sync_tiendanube_unpublishes_managed_products_missing_in_gn(tmp_path: Pa
     assert result.counts["UNPUBLISHED"] == 1
     assert FakeTiendaNubeApiClient.update_product_calls == 1
     assert FakeTiendaNubeApiClient.update_variant_calls == 1
+
+
+def test_limited_sync_does_not_unpublish_missing_products(tmp_path: Path) -> None:
+    class FakeGNApiClient:
+        def __init__(self, credentials: Credentials) -> None:
+            self.credentials = credentials
+
+        def __enter__(self) -> "FakeGNApiClient":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get_catalog(self) -> list[dict[str, object]]:
+            return []
+
+        def get_usd_exchange(self) -> float:
+            return 1000.0
+
+    class FakeTiendaNubeApiClient:
+        update_product_calls = 0
+        update_variant_calls = 0
+
+        def __init__(self, credentials: TiendaNubeCredentials) -> None:
+            self.credentials = credentials
+
+        def __enter__(self) -> "FakeTiendaNubeApiClient":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def list_all_products(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "id": 77,
+                    "name": {"es": "Producto viejo"},
+                    "handle": {"es": "gn-77"},
+                    "tags": "GN_SYNC, Audio",
+                    "variants": [{"id": 88, "stock": 10}],
+                }
+            ]
+
+        def update_product(self, product_id: int, payload: dict[str, object]) -> dict[str, object]:
+            type(self).update_product_calls += 1
+            return {"id": product_id, **payload}
+
+        def update_variant(self, product_id: int, variant_id: int, payload: dict[str, object]) -> dict[str, object]:
+            type(self).update_variant_calls += 1
+            return {"id": variant_id, "product_id": product_id, **payload}
+
+    service = StockExportService(
+        workspace_dir=tmp_path,
+        config=_make_sync_config(tmp_path, test_limit=20),
+        credentials=Credentials(client_id=1, username="demo", password="secret"),
+        tiendanube_credentials=TiendaNubeCredentials(store_id=10, access_token="token", user_agent="tests"),
+        api_client_class=FakeGNApiClient,
+        tiendanube_api_client_class=FakeTiendaNubeApiClient,
+    )
+
+    result = service._sync_tiendanube(dry_run=False, limit=20, images_only=False)
+
+    assert result.counts == {}
+    assert FakeTiendaNubeApiClient.update_product_calls == 0
+    assert FakeTiendaNubeApiClient.update_variant_calls == 0
 
 
 def test_sync_tiendanube_writes_image_failure_report(tmp_path: Path) -> None:

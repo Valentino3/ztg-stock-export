@@ -55,7 +55,7 @@ TIENDANUBE_USER_AGENT=Mi App (mail@dominio.com)
 - `brand_map.csv`: `source_brand,target_brand`
 - `category_map.csv`: `source_category,source_subcategory,target_category,target_subcategory,target_category_id`
 
-Para el sync por API, `target_category_id` debe ser el ID real de la categoria en Tienda Nube.
+Para el sync por API, `target_category_id` es opcional. Si esta vacio, la app busca la categoria en Tienda Nube por nombre y, en modo productivo, la crea automaticamente si no existe.
 
 El filtro `allowed_categories` / `excluded_categories` se aplica sobre la categoria final, despues de leer `category_map.csv`.
 Por eso, si GN devuelve una categoria con otro nombre, primero la remapeamos en `category_map.csv` y despues la app decide si se sube o no.
@@ -139,7 +139,8 @@ El archivo sale en `exports/` como `gn_categorias_*.csv` y `gn_categorias_*.xlsx
 Columnas principales:
 
 - `source_category` y `source_subcategory`: categorias originales de GN
-- `target_category`, `target_subcategory` y `target_category_id`: columnas editables para mapping con Tienda Nube
+- `target_category` y `target_subcategory`: nombres finales que se usaran en Tienda Nube
+- `target_category_id`: ID manual opcional; si queda vacio, la app resuelve o crea la categoria por API
 - `product_count`, `products_with_stock` y `stock_total`: ayuda para decidir que categorias filtrar o subir
 
 ### Probar flujo completo

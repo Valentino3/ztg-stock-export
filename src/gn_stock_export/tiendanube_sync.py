@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+import unicodedata
 from urllib.parse import urlparse
 
 from openpyxl.utils import get_column_letter
@@ -79,6 +80,13 @@ def run_tiendanube_sync(
             for handle, product in all_by_handle.items()
             if _has_managed_tag(product, config.tiendanube_sync.managed_tag)
         }
+        if not images_only:
+            prepared_products, category_rows = _ensure_product_categories(
+                client=client,
+                products=prepared_products,
+                dry_run=dry_run,
+            )
+            report_rows.extend(category_rows)
 
         current_handles = {product.handle for product in prepared_products}
         for product in prepared_products:
@@ -93,7 +101,8 @@ def run_tiendanube_sync(
             )
             report_rows.append(row)
 
-        if not images_only and config.tiendanube_sync.unpublish_missing:
+        is_limited_run = limit is not None and limit > 0
+        if not images_only and config.tiendanube_sync.unpublish_missing and not is_limited_run:
             missing_handles = sorted(set(managed_by_handle) - current_handles)
             for handle in missing_handles:
                 row = _unpublish_missing_product(
@@ -315,6 +324,163 @@ def run_tiendanube_failed_image_retry(
         state_path=state_path,
         counts=counts,
     )
+
+
+def _ensure_product_categories(
+    *,
+    client: TiendaNubeApiClient,
+    products: list[PreparedProduct],
+    dry_run: bool,
+) -> tuple[list[PreparedProduct], list[dict[str, object]]]:
+    products_missing_category_id = [
+        product
+        for product in products
+        if product.category_id is None and product.category_name
+    ]
+    if not products_missing_category_id:
+        return products, []
+
+    categories = client.list_all_categories()
+    category_index = _build_category_index(categories)
+    category_cache: dict[tuple[str, str, int | None], int | None] = {}
+    report_rows: list[dict[str, object]] = []
+    resolved_products: list[PreparedProduct] = []
+
+    for product in products:
+        if product.category_id is not None or not product.category_name:
+            resolved_products.append(product)
+            continue
+
+        parent_id = _resolve_category_id(
+            client=client,
+            name=product.category_name,
+            parent_id=None,
+            category_index=category_index,
+            category_cache=category_cache,
+            report_rows=report_rows,
+            dry_run=dry_run,
+        )
+        target_category_id = parent_id
+
+        if parent_id is not None and product.subcategory_name:
+            child_id = _resolve_category_id(
+                client=client,
+                name=product.subcategory_name,
+                parent_id=parent_id,
+                category_index=category_index,
+                category_cache=category_cache,
+                report_rows=report_rows,
+                dry_run=dry_run,
+            )
+            target_category_id = child_id or parent_id
+
+        if target_category_id is None:
+            report_rows.append(
+                {
+                    "item_id": product.item_id,
+                    "handle": product.handle,
+                    "name": product.name,
+                    "action": "CATEGORY",
+                    "status": "CATEGORY_NOT_RESOLVED",
+                    "product_id": "",
+                    "variant_id": "",
+                    "image_count": 0,
+                    "details": (
+                        "No se pudo resolver la categoria en Tienda Nube. "
+                        "En dry-run no se crean categorias nuevas."
+                    ),
+                }
+            )
+            resolved_products.append(product)
+            continue
+
+        resolved_products.append(replace(product, category_id=target_category_id))
+
+    return resolved_products, report_rows
+
+
+def _resolve_category_id(
+    *,
+    client: TiendaNubeApiClient,
+    name: str,
+    parent_id: int | None,
+    category_index: dict[tuple[str, int | None], int],
+    category_cache: dict[tuple[str, str, int | None], int | None],
+    report_rows: list[dict[str, object]],
+    dry_run: bool,
+) -> int | None:
+    normalized_name = _normalize_category_key(name)
+    cache_key = (normalized_name, name, parent_id)
+    if cache_key in category_cache:
+        return category_cache[cache_key]
+
+    index_key = (normalized_name, parent_id)
+    existing_id = category_index.get(index_key)
+    if existing_id is not None:
+        category_cache[cache_key] = existing_id
+        return existing_id
+
+    if dry_run:
+        report_rows.append(
+            {
+                "item_id": "",
+                "handle": "",
+                "name": name,
+                "action": "CATEGORY",
+                "status": "DRY_RUN_CREATE_CATEGORY",
+                "product_id": "",
+                "variant_id": "",
+                "image_count": 0,
+                "details": _category_detail(name, parent_id, "Se crearia la categoria en Tienda Nube."),
+            }
+        )
+        category_cache[cache_key] = None
+        return None
+
+    created = client.create_category(name, parent_id=parent_id)
+    created_id = _as_int(created.get("id"))
+    category_index[index_key] = created_id
+    category_cache[cache_key] = created_id
+    report_rows.append(
+        {
+            "item_id": "",
+            "handle": "",
+            "name": name,
+            "action": "CATEGORY",
+            "status": "CREATED_CATEGORY",
+            "product_id": "",
+            "variant_id": "",
+            "image_count": 0,
+            "details": _category_detail(name, parent_id, f"Categoria creada con ID {created_id}."),
+        }
+    )
+    return created_id
+
+
+def _build_category_index(categories: list[dict[str, Any]]) -> dict[tuple[str, int | None], int]:
+    index: dict[tuple[str, int | None], int] = {}
+    for category in categories:
+        category_id = _as_int(category.get("id"))
+        if category_id <= 0:
+            continue
+        name = _localized_text(category.get("name"))
+        if not name:
+            continue
+        index[(_normalize_category_key(name), _category_parent_id(category))] = category_id
+    return index
+
+
+def _category_parent_id(category: dict[str, Any]) -> int | None:
+    parent = category.get("parent")
+    if isinstance(parent, dict):
+        parent = parent.get("id")
+    parent_id = _optional_int(parent)
+    return parent_id if parent_id and parent_id > 0 else None
+
+
+def _category_detail(name: str, parent_id: int | None, message: str) -> str:
+    parent = f" parent={parent_id}" if parent_id is not None else ""
+    return f"{message} Categoria='{name}'{parent}."
 
 
 def _unpublish_missing_product(
@@ -609,6 +775,12 @@ def _normalize_tags(value: object) -> set[str]:
     if value is None:
         return set()
     return {part.strip().lower() for part in str(value).split(",") if part.strip()}
+
+
+def _normalize_category_key(value: object) -> str:
+    normalized = unicodedata.normalize("NFKD", _as_text(value))
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    return " ".join(ascii_value.lower().split())
 
 
 def _localized_text(value: object) -> str:

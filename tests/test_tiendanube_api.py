@@ -64,6 +64,60 @@ def test_tiendanube_api_client_retries_429_before_succeeding() -> None:
     assert products[0]["id"] == 10
 
 
+def test_tiendanube_api_client_retries_read_timeout_before_succeeding() -> None:
+    credentials = TiendaNubeCredentials(
+        store_id=12345,
+        access_token="token-abc",
+        user_agent="gn-stock-export-tests",
+    )
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ReadTimeout("read operation timed out", request=request)
+        return httpx.Response(200, json=[{"id": 10, "handle": {"es": "gn-100"}}])
+
+    transport = httpx.MockTransport(handler)
+    with TiendaNubeApiClient(
+        credentials=credentials,
+        transport=transport,
+        max_retries=2,
+        retry_base_delay_seconds=0.0,
+    ) as client:
+        products = client.list_products()
+
+    assert calls == 2
+    assert products[0]["id"] == 10
+
+
+def test_tiendanube_api_client_raises_after_read_timeout_retry_exhaustion() -> None:
+    credentials = TiendaNubeCredentials(
+        store_id=12345,
+        access_token="token-abc",
+        user_agent="gn-stock-export-tests",
+    )
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("read operation timed out", request=request)
+
+    transport = httpx.MockTransport(handler)
+    with TiendaNubeApiClient(
+        credentials=credentials,
+        transport=transport,
+        max_retries=1,
+        retry_base_delay_seconds=0.0,
+    ) as client:
+        with pytest.raises(TiendaNubeApiError, match="no respondio"):
+            client.list_products()
+
+    assert calls == 2
+
+
 def test_tiendanube_api_client_raises_after_429_retry_exhaustion() -> None:
     credentials = TiendaNubeCredentials(
         store_id=12345,
@@ -105,3 +159,31 @@ def test_tiendanube_api_client_deletes_product() -> None:
     transport = httpx.MockTransport(handler)
     with TiendaNubeApiClient(credentials=credentials, transport=transport) as client:
         client.delete_product(99)
+
+
+def test_tiendanube_api_client_lists_and_creates_categories() -> None:
+    credentials = TiendaNubeCredentials(
+        store_id=12345,
+        access_token="token-abc",
+        user_agent="gn-stock-export-tests",
+    )
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            assert request.url.path == "/v1/12345/categories"
+            return httpx.Response(200, json=[{"id": 1, "name": {"es": "Computacion"}, "parent": None}])
+        assert request.method == "POST"
+        assert request.url.path == "/v1/12345/categories"
+        assert request.headers["Content-Type"] == "application/json"
+        return httpx.Response(201, json={"id": 2, "name": {"es": "Notebooks"}, "parent": 1})
+
+    transport = httpx.MockTransport(handler)
+    with TiendaNubeApiClient(credentials=credentials, transport=transport) as client:
+        categories = client.list_categories()
+        created = client.create_category("Notebooks", parent_id=1)
+
+    assert categories[0]["id"] == 1
+    assert created["id"] == 2
+    assert calls == [("GET", "/v1/12345/categories"), ("POST", "/v1/12345/categories")]
